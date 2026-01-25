@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NES 에뮬레이터 - 젤다 세이브 완벽 해결 (SRAM 포함)</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #222; color: #fff; padding: 20px; }
+        canvas { border: 2px solid #fff; image-rendering: pixelated; display: block; margin: 20px auto; background: #000; }
+        form { margin: 20px 0; background: #333; padding: 15px; border-radius: 5px; }
+        label { display: block; margin: 10px 0; }
+        input[type="text"] { width: 100px; }
+        button { background: #4CAF50; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; margin: 5px; }
+        button:hover { background: #45a049; }
+        .instructions { background: #ff9800; padding: 15px; border-radius: 5px; margin: 20px 0; color: #000; }
+        .zelda-guide { background: #2196F3; color: white; }
+        .success { background: #4CAF50; color: white; padding: 10px; border-radius: 5px; margin: 10px 0; }
+    </style>
+    <script src="https://unpkg.com/nostalgist@latest/dist/nostalgist.umd.js"></script>
+</head>
+<body>
+    <h1>🏆 NES 젤다 에뮬레이터 (SRAM + 퀵세이브 완벽!)</h1>
+    <p>.nes 또는 .fds ROM 선택 → Play! (세이브 자동 복원)</p>
+    <input type="file" id="romFile" accept=".nes,.fds">
+    <button onclick="loadROM()">Play</button>
+    <button onclick="restartEmulator()" style="background: #2196F3;">재시작</button>
+
+    <div class="instructions zelda-guide">
+        <h3>🔥 세이브 선택 화면에서</h3>
+        <ul>
+            <li>NEW GAME 선택 → Enter 눌러 이름 입력</li>
+            <li>기존 세이브 (링크 인형) → X 눌러 로드</li>
+            <li>KILL MODE: 세이브 삭제 (주의!)</li>
+        </ul>
+    </div>
+
+    <div class="instructions">
+        <h3>💾 게임 내 세이브 (필수!)</h3>
+        <ul>
+            <li>플레이 중 Enter(Start) → 인벤토리</li>
+            <li>F1 + F2 동시에 → 세이브 메뉴</li>
+            <li>슬롯 선택 → X(A) → 저장</li>
+            <li>죽으면 세이브 선택 화면으로 → 로드</li>
+        </ul>
+        <p><em>죽기 전에 게임 내 세이브 + 퀵세이브 버튼 눌러!</em></p>
+    </div>
+
+    <div class="instructions">
+        <h3>⚡ 퀵세이브 (추가)</h3>
+        <ul>
+            <li>게임 내 세이브 후 버튼 눌러</li>
+            <li>페이지 새로고침해도 복원 (SRAM 포함)</li>
+        </ul>
+    </div>
+
+    <div>
+        <h2>🎮 P1 컨트롤</h2>
+        <form id="controlsFormP1">
+            <label>A: <input id="aKey" type="text" value="x"></label>
+            <label>B: <input id="bKey" type="text" value="z"></label>
+            <label>SELECT: <input id="selectKey" type="text" value="tab"></label>
+            <label>START: <input id="startKey" type="text" value="enter"></label>
+            <label>↑: <input id="upKey" type="text" value="up"></label>
+            <label>↓: <input id="downKey" type="text" value="down"></label>
+            <label>←: <input id="leftKey" type="text" value="left"></label>
+            <label>→: <input id="rightKey" type="text" value="right"></label>
+        </form>
+    </div>
+
+    <div>
+        <h2>💾 P2 키 (세이브)</h2>
+        <form id="controlsFormP2">
+            <label>P2 ↑: <input id="p2upKey" type="text" value="f1"></label>
+            <label>P2 A: <input id="p2aKey" type="text" value="f2"></label>
+        </form>
+        <button onclick="saveAllControls()" style="background: #FF9800;">키 저장</button>
+    </div>
+
+    <div>
+        <h2>퀵세이브</h2>
+        <button onclick="saveGameState()" style="background: #FF9800;">🛡️ 세이브 (SRAM+다운)</button>
+        <button onclick="clearAutoSave()" style="background: #f44336;">🗑️ 삭제</button>
+        <br>
+        <input type="file" id="stateFile" accept=".sta">
+        <button onclick="loadGameState()">📁 로드</button>
+    </div>
+
+    <script>
+        let nostalgist;
+        let currentRomHash = '';
+        let romName = '';
+        let customControls = {
+            input_player1_a: 'x',
+            input_player1_b: 'z',
+            input_player1_select: 'tab',
+            input_player1_start: 'enter',
+            input_player1_up: 'up',
+            input_player1_down: 'down',
+            input_player1_left: 'left',
+            input_player1_right: 'right',
+            input_player2_up: 'f1',
+            input_player2_a: 'f2'
+        };
+
+        // Base64 함수
+        async function blobToBase64(blob) {
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                reader.onerror = reject;
+                reader.readAsDataURL(blob);
+            });
+        }
+
+        function base64ToBlob(base64) {
+            const byteCharacters = atob(base64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            return new Blob([byteArray]);
+        }
+
+        async function getRomHash(file) {
+            const buffer = await file.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function loadControls() {
+            const saved = localStorage.getItem('nesControls');
+            if (saved) customControls = JSON.parse(saved);
+            document.getElementById('aKey').value = customControls.input_player1_a;
+            document.getElementById('bKey').value = customControls.input_player1_b;
+            document.getElementById('selectKey').value = customControls.input_player1_select;
+            document.getElementById('startKey').value = customControls.input_player1_start;
+            document.getElementById('upKey').value = customControls.input_player1_up;
+            document.getElementById('downKey').value = customControls.input_player1_down;
+            document.getElementById('leftKey').value = customControls.input_player1_left;
+            document.getElementById('rightKey').value = customControls.input_player1_right;
+            document.getElementById('p2upKey').value = customControls.input_player2_up;
+            document.getElementById('p2aKey').value = customControls.input_player2_a;
+        }
+
+        function saveAllControls() {
+            customControls.input_player1_a = document.getElementById('aKey').value.toLowerCase().trim();
+            customControls.input_player1_b = document.getElementById('bKey').value.toLowerCase().trim();
+            customControls.input_player1_select = document.getElementById('selectKey').value.toLowerCase().trim();
+            customControls.input_player1_start = document.getElementById('startKey').value.toLowerCase().trim();
+            customControls.input_player1_up = document.getElementById('upKey').value.toLowerCase().trim();
+            customControls.input_player1_down = document.getElementById('downKey').value.toLowerCase().trim();
+            customControls.input_player1_left = document.getElementById('leftKey').value.toLowerCase().trim();
+            customControls.input_player1_right = document.getElementById('rightKey').value.toLowerCase().trim();
+            customControls.input_player2_up = document.getElementById('p2upKey').value.toLowerCase().trim();
+            customControls.input_player2_a = document.getElementById('p2aKey').value.toLowerCase().trim();
+            localStorage.setItem('nesControls', JSON.stringify(customControls));
+            alert('키 저장됨! 재시작 적용');
+        }
+
+        loadControls();
+
+        async function loadROM() {
+            const file = document.getElementById('romFile').files[0];
+            if (!file) return alert('ROM 선택!');
+            romName = file.name.replace(/\.[^/.]+$/, "");
+            const romHash = await getRomHash(file);
+            currentRomHash = romHash;
+            try {
+                nostalgist = await Nostalgist.launch({
+                    core: 'fceumm',
+                    rom: file,
+                    retroarchConfig: customControls
+                });
+
+                // SRAM 복원
+                const srmKey = `nesSRAM_${romHash}`;
+                const srmBase64 = localStorage.getItem(srmKey);
+                if (srmBase64) {
+                    const srmBlob = base64ToBlob(srmBase64);
+                    const srmBuffer = await srmBlob.arrayBuffer();
+                    const srmUint8 = new Uint8Array(srmBuffer);
+                    const fs = nostalgist.getEmscriptenFS();
+                    const srmPath = `/home/web_user/retroarch/userdata/saves/${romName}.srm`;
+                    fs.mkdirTree('/home/web_user/retroarch/userdata/saves'); // 디렉토리 확보
+                    fs.writeFile(srmPath, srmUint8);
+                    console.log('SRAM 복원됨!');
+                }
+
+                // 퀵세이브 로드
+                const savedKey = `nesState_${romHash}`;
+                const base64 = localStorage.getItem(savedKey);
+                if (base64) {
+                    const blob = base64ToBlob(base64);
+                    setTimeout(async () => {
+                        await nostalgist.loadState(blob);
+                    }, 1000);
+                }
+
+                // 포커스
+                setTimeout(() => {
+                    const canvas = document.querySelector('canvas');
+                    if (canvas) {
+                        canvas.tabIndex = 1;
+                        canvas.focus();
+                        canvas.click();
+                    }
+                }, 1500);
+
+                alert('🎮 로드됨! (SRAM + 퀵세이브 복원)');
+            } catch (e) {
+                console.error(e);
+                alert('로드 실패!');
+            }
+        }
+
+        async function saveGameState() {
+            if (!nostalgist) return alert('게임 시작!');
+            try {
+                // SRAM 플러시
+                if (nostalgist.saveSRAM) await nostalgist.saveSRAM();
+
+                // 상태 저장
+                const { state } = await nostalgist.saveState();
+                const stateBase64 = await blobToBase64(state);
+                localStorage.setItem(`nesState_${currentRomHash}`, stateBase64);
+
+                // SRAM 데이터 읽기
+                const fs = nostalgist.getEmscriptenFS();
+                const srmPath = `/home/web_user/retroarch/userdata/saves/${romName}.srm`;
+                if (fs.existsSync(srmPath)) {
+                    const srmData = fs.readFile(srmPath, {encoding: 'binary'});
+                    const srmBase64 = await blobToBase64(new Blob([srmData]));
+                    localStorage.setItem(`nesSRAM_${currentRomHash}`, srmBase64);
+                    console.log('SRAM 저장됨!');
+                }
+
+                // 다운로드 (퀵세이브)
+                const url = URL.createObjectURL(state);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'zelda_quick.sta';
+                a.click();
+                URL.revokeObjectURL(url);
+
+                alert('💾 세이브 완료! (SRAM 포함)');
+            } catch (e) {
+                alert('실패: ' + e.message);
+            }
+        }
+
+        function clearAutoSave() {
+            if (currentRomHash) {
+                localStorage.removeItem(`nesState_${currentRomHash}`);
+                localStorage.removeItem(`nesSRAM_${currentRomHash}`);
+                alert('🗑️ 삭제됨!');
+            }
+        }
+
+        async function loadGameState() {
+            if (!nostalgist) return alert('게임 시작!');
+            const file = document.getElementById('stateFile').files[0];
+            if (!file) return alert('파일 선택!');
+            try {
+                await nostalgist.loadState(file);
+                alert('로드 완료!');
+            } catch (e) {
+                alert('실패');
+            }
+        }
+
+        async function restartEmulator() {
+            if (nostalgist) await nostalgist.destroy().catch(() => {});
+            loadROM();
+        }
+    </script>
+</body>
+</html>
