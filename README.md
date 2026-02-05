@@ -1,2 +1,5 @@
 # vibe-coding-archive
-List of everything I've vibe coded(Heavy AI assisted)
+
+An archive of projects I’ve built through vibe coding.
+
+This repository is a collection of experiments, prototypes, and random ideas created with heavy AI assistance.
